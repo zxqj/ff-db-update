@@ -1,0 +1,31 @@
+[project]
+name = "slay-db-update"
+version = "0.1"
+description = ""
+readme = "README.md"
+authors = [{name = ""}]
+license = "Apache-2.0"
+requires-python = ">=3.8"
+classifiers = []
+dependencies = [
+    "click",
+    "sh",
+    "rich",
+    "PyYAML"
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project.urls]
+Homepage = "https://github.com/zxqj/slay-db-update"
+Changelog = "https://github.com/zxqj/slay-db-update/releases"
+Issues = "https://github.com/zxqj/slay-db-update/issues"
+CI = "https://github.com/zxqj/slay-db-update/actions"
+
+[project.scripts]
+slay-db-update = "slay_db_update.cli:cli"
+
+[project.optional-dependencies]
+test = ["pytest"]
