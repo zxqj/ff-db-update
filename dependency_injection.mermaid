@@ -1,0 +1,30 @@
+flowchart TD
+
+    A[File configFile] --> B["(File loggingConf) =>
+        Fn&lt;String, Logger&gt; loggerFactory"]
+B --> P("(loggerFactory, jobType, jobServiceImpl) =>
+Job runningJob")
+C["
+
+class JobService
+{
+
+Job createJob(JobType jobType);
+...
+} => JobService jobServiceImpl
+"] --> P
+B --> C
+Q(@CommandLineArg JobType jobType) --> P
+P --> X["class DbLoggerHandler: LoggerHandler
+{
+DbLoggerHandler(Job j, DbConn dc);
+} =>"]
+X --> D["(Job runningJob, Fn&lt;String, Logger&gt; loggerFactory, LoggerHandler dbHandler) =>
+Fn&lt;String, Logger&gt; loggerFactory
+//produces loggerFactory that instantiates and attaches dbHandler to logger"]
+C --> D
+P --> D
+
+%% X  -->|One| Y[ Laptop]
+%% X  -->|Two| Z[ iPhone]
+%% X  -->|Three| X[fa:fa-car Car]
