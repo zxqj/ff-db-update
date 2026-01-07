@@ -5,24 +5,15 @@ from nba_api.stats.endpoints.playerindex import PlayerIndex
 from nba_api.stats.endpoints.commonplayerinfo import CommonPlayerInfo
 from nba_api.stats.library.parameters import Active
 from sleeper_wrapper import Players
-import psycopg2
 from psycopg2.extras import execute_values
-import json
-import yaml
+import time
 
 from datetime import datetime
+
+from slay_db_update.utils import get_nba_stats_result
+
 p = Path()
 
-def get_nba_stats_result(endpoint, result_set_name = None):
-    box = Box(**endpoint.get_dict())
-    result_sets: dict[str, Box] = {}
-    for resultSet in box.resultSets:
-        result_sets[resultSet.name] = []
-        for row in resultSet.rowSet:
-            result_sets[resultSet.name].append(Box(**dict(zip([header.lower() for header in resultSet.headers], row))))
-    if result_set_name is None:
-        return result_sets
-    return result_sets[result_set_name]
 
 def get_nbaorg_players():
     l = get_nba_stats_result(PlayerIndex(active_nullable=Active.active_player), "PlayerIndex")
@@ -34,9 +25,38 @@ def get_sleeper_players():
     return BoxList([player for player in sleeperbox.values()])
 
 # python
-def update():
+def update(db_conn=None, logger_factory=None):
+    # Initialize logger via factory if provided; be defensive so this function
+    # can be called without a logger_factory in tests or ad-hoc runs.
+    logger = logger_factory(__name__) if logger_factory else None
+    print(logger)
+
+    # Sleeper API call with timing and logging
+    start = time.perf_counter()
+    if logger:
+        logger.debug("requesting sleeper players")
     sleeper_players = get_sleeper_players()
+    elapsed = time.perf_counter() - start
+    if logger:
+        try:
+            sleeper_count = len(sleeper_players)
+        except Exception:
+            # fallback for iterable without len
+            sleeper_count = sum(1 for _ in sleeper_players) if hasattr(sleeper_players, "__iter__") else 0
+        logger.info("sleeper returned %d players in %.3f seconds", sleeper_count, elapsed)
+
+    # NBA.org API call with timing and logging
+    start = time.perf_counter()
+    if logger:
+        logger.debug("requesting nbaorg players")
     nbaorg_players = get_nbaorg_players()
+    elapsed = time.perf_counter() - start
+    if logger:
+        try:
+            nbaorg_count = len(nbaorg_players)
+        except Exception:
+            nbaorg_count = sum(1 for _ in nbaorg_players) if hasattr(nbaorg_players, "__iter__") else 0
+        logger.info("nbaorg returned %d players in %.3f seconds", nbaorg_count, elapsed)
 
     double_count = 0
     not_in_sleeper = []
@@ -172,27 +192,9 @@ def update():
     players_rows = make_rows(in_both, require_sleeper_not_null=True)
     unrecognized_rows = make_rows(not_in_sleeper, require_sleeper_not_null=False)
 
-    # read DSN from project-root config.yaml
-    config_path = Path.cwd() / 'config.yaml'
-    if not config_path.exists():
-        raise FileNotFoundError(f"`config.yaml` not found at {config_path}")
-    with open(config_path, 'r') as cf:
-        cfg = yaml.safe_load(cf) or {}
-
-    dsn = None
-    if isinstance(cfg, dict):
-        if 'database' in cfg and isinstance(cfg['database'], dict):
-            dsn = cfg['database'].get('dsn')
-        if not dsn:
-            dsn = cfg.get('dsn') or cfg.get('database_dsn') or cfg.get('postgres_dsn')
-
-    if not dsn:
-        raise RuntimeError("database connection string not found in `config.yaml` (expected `database.dsn` or top-level `dsn`)")
-
-    conn = psycopg2.connect(dsn)
     try:
-        conn.autocommit = False
-        cur = conn.cursor()
+
+        cur = db_conn.cursor()
 
         # create tables with individual columns for each field (lowercase)
         cur.execute("""
@@ -276,7 +278,7 @@ def update():
 
         if unrecognized_rows:
             insert_sql_unrec = f"""
-            INSERT INTO "unrecognized players" ({', '.join(fields)}, date_inserted)
+            INSERT INTO "unrecognized_players" ({', '.join(fields)}, date_inserted)
             VALUES %s
             ON CONFLICT (person_id) DO NOTHING
             RETURNING person_id
@@ -284,12 +286,15 @@ def update():
             execute_values(cur, insert_sql_unrec, unrecognized_rows, page_size=100)
             returned_unrec = cur.fetchall()
             inserted_unrecognized = len(returned_unrec)
-
-        conn.commit()
-
+        #
     finally:
-        conn.close()
+        pass
+    # log only the numbers of newly-inserted players
+    if logger:
+        logger.info("inserted %d new players and %d unrecognized players", inserted_players, inserted_unrecognized)
+    else:
+        # fallback for environments without a logger
+        print(inserted_players)
+        print(inserted_unrecognized)
 
-    # print only the numbers of newly-inserted players
-    print(inserted_players)
-    print(inserted_unrecognized)
+    return inserted_players, inserted_unrecognized
