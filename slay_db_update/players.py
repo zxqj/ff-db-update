@@ -230,7 +230,7 @@ def update(db_conn=None, logger_factory=None):
         )
         """)
         cur.execute("""
-        CREATE TABLE IF NOT EXISTS "unrecognized players" (
+        CREATE TABLE IF NOT EXISTS "unrecognized_players" (
             person_id INTEGER PRIMARY KEY,
             sleeper_id INTEGER,
             player_last_name TEXT,
@@ -276,6 +276,7 @@ def update(db_conn=None, logger_factory=None):
             returned = cur.fetchall()
             inserted_players = len(returned)
 
+
         if unrecognized_rows:
             insert_sql_unrec = f"""
             INSERT INTO "unrecognized_players" ({', '.join(fields)}, date_inserted)
@@ -286,7 +287,8 @@ def update(db_conn=None, logger_factory=None):
             execute_values(cur, insert_sql_unrec, unrecognized_rows, page_size=100)
             returned_unrec = cur.fetchall()
             inserted_unrecognized = len(returned_unrec)
-        #
+    except Exception as e:
+        logger.error("error inserting players: %s", str(e))
     finally:
         pass
     # log only the numbers of newly-inserted players

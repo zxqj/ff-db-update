@@ -1,10 +1,12 @@
+from json import JSONDecodeError
+
 from box import Box
 import time
 import functools
 import inspect
 import logging
-from typing import Optional, Callable, Any, TypeVar
-
+from typing import Optional, Callable, Any
+import json
 
 def get_nba_stats_result(endpoint, result_set_name = None):
     box = Box(**endpoint.get_dict())
@@ -18,10 +20,16 @@ def get_nba_stats_result(endpoint, result_set_name = None):
     return result_sets[result_set_name]
 
 def invoke_endpoint(class_ref, logger, **kwargs):
-    endpoint_instance = class_ref(**kwargs)
     name = class_ref.__name__
-    invoker = timed(name, logger)(get_nba_stats_result)
-    return invoker(endpoint_instance, result_set_name=class_ref.__name__)
+    def f(**_kwargs):
+        try:
+            return class_ref(**_kwargs)
+        except JSONDecodeError as e:
+            argstr = ",".join([f"{k}: {json.dumps(v)}" for k, v in kwargs.items()])
+            raise RuntimeError(f"JSON decode error invoking {name} with args {argstr}") from e
+
+    invoker = timed(name, logger)(f)
+    return get_nba_stats_result(invoker(**kwargs), result_set_name=name)
 
 def timed(identifier: str, logger: Optional[logging.Logger]):
     """

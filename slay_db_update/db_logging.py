@@ -15,7 +15,6 @@ class DBHandler(logging.Handler):
         super().__init__(level)
         self.job_id = int(job_id)
         self.conn = conn
-        self.lock = threading.Lock()
 
     def emit(self, record: logging.LogRecord) -> None:
         try:

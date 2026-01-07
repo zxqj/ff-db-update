@@ -1,7 +1,7 @@
 from datetime import datetime
 from psycopg2.extras import execute_values
 from nba_api.stats.endpoints.playergamelogs import PlayerGameLogs
-from .utils import get_nba_stats_result, timed
+from .utils import get_nba_stats_result, timed, invoke_endpoint
 
 
 def update(db_conn=None, logger_factory=None):
@@ -93,8 +93,7 @@ def update(db_conn=None, logger_factory=None):
 
         # request player game logs
         try:
-            endpoint = PlayerGameLogs(player_id_nullable=pid, date_from_nullable=date_from)
-            games = timed("PlayerGameLogs", logger)(get_nba_stats_result(endpoint, 'PlayerGameLogs'))
+            games = invoke_endpoint(PlayerGameLogs, logger, player_id_nullable=pid, date_from_nullable=date_from)
         except Exception:
             logger.warning("failed to retrieve games for player %s", pid, exc_info=True)
             continue
