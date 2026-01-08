@@ -5,15 +5,17 @@ from nba_api.stats.endpoints.playerindex import PlayerIndex
 from nba_api.stats.endpoints.commonplayerinfo import CommonPlayerInfo
 from nba_api.stats.library.parameters import Active
 from sleeper_wrapper import Players
-from psycopg2.extras import execute_values
-import time
+# new imports for SQLAlchemy
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
-from datetime import datetime
-
-from slay_db_update.utils import get_nba_stats_result
+from .dal_utils import DalUtils
+from .players_repo import PlayerRepository
+from .models import Player as PlayerModel
+import yaml
+from slay_db_update.utils import get_nba_stats_result, timed
 
 p = Path()
-
 
 def get_nbaorg_players():
     l = get_nba_stats_result(PlayerIndex(active_nullable=Active.active_player), "PlayerIndex")
@@ -24,39 +26,38 @@ def get_sleeper_players():
     sleeperbox = Box(**sleeperjson)
     return BoxList([player for player in sleeperbox.values()])
 
+def _get_db_session(config_path=None):
+    # read connection string from config.yaml in project root
+    cfg_path = config_path or Path(__file__).resolve().parents[2] / 'config.yaml'
+    if not cfg_path.exists():
+        raise RuntimeError(f"config.yaml not found at expected path: {cfg_path}")
+    cfg = yaml.safe_load(cfg_path.read_text())
+    conn = cfg.get('database') or cfg.get('connection_string') or cfg.get('connection')
+    if conn is None:
+        raise RuntimeError("database connection string not found in config.yaml")
+    engine = create_engine(conn)
+    Session = sessionmaker(bind=engine)
+    return Session()
+
+dal_utils = DalUtils()
 # python
 def update(db_conn=None, logger_factory=None):
     # Initialize logger via factory if provided; be defensive so this function
     # can be called without a logger_factory in tests or ad-hoc runs.
     logger = logger_factory(__name__) if logger_factory else None
-    print(logger)
 
-    # Sleeper API call with timing and logging
-    start = time.perf_counter()
-    if logger:
-        logger.debug("requesting sleeper players")
-    sleeper_players = get_sleeper_players()
-    elapsed = time.perf_counter() - start
-    if logger:
-        try:
-            sleeper_count = len(sleeper_players)
-        except Exception:
-            # fallback for iterable without len
-            sleeper_count = sum(1 for _ in sleeper_players) if hasattr(sleeper_players, "__iter__") else 0
-        logger.info("sleeper returned %d players in %.3f seconds", sleeper_count, elapsed)
 
-    # NBA.org API call with timing and logging
-    start = time.perf_counter()
+    sleeper_players = timed("Sleeper API get-all-players request", logger)(get_sleeper_players)
+
+    sleeper_count = sum(1 for _ in sleeper_players) if hasattr(sleeper_players, "__iter__") else 0
     if logger:
-        logger.debug("requesting nbaorg players")
+        logger.info("sleeper returned %d players", sleeper_count)
+
     nbaorg_players = get_nbaorg_players()
-    elapsed = time.perf_counter() - start
+
+    nbaorg_count = sum(1 for _ in nbaorg_players) if hasattr(nbaorg_players, "__iter__") else 0
     if logger:
-        try:
-            nbaorg_count = len(nbaorg_players)
-        except Exception:
-            nbaorg_count = sum(1 for _ in nbaorg_players) if hasattr(nbaorg_players, "__iter__") else 0
-        logger.info("nbaorg returned %d players in %.3f seconds", nbaorg_count, elapsed)
+        logger.info("nbaorg returned %d players", nbaorg_count)
 
     double_count = 0
     not_in_sleeper = []
@@ -143,160 +144,91 @@ def update(db_conn=None, logger_factory=None):
         "to_year",
     ]
 
-    def make_rows(boxes, require_sleeper_not_null=False):
-        rows = []
-        for b in boxes:
-            d = b.to_dict() if hasattr(b, "to_dict") else dict(b)
-            person_id = d.get("person_id")
-            if person_id is None:
-                continue
-            person_id = to_int(person_id)
-            sleeper_id = d.get("sleeper_id")
-            if require_sleeper_not_null and sleeper_id is None:
-                continue
-            sleeper_int = to_int(sleeper_id) if sleeper_id is not None else None
+    def make_entity(box, require_sleeper_not_null=False):
+        d = box.to_dict() if hasattr(box, "to_dict") else dict(box)
+        person_id = d.get("person_id") or d.get("id")
+        if person_id is None:
+            return None
+        person_id = to_int(person_id)
+        sleeper_id = d.get("sleeper_id")
+        if require_sleeper_not_null and sleeper_id is None:
+            return None
+        # sleeper_id is no longer stored on Player; return PlayerModel instance and
+        # let caller create mapping rows for sleeper_player_ids separately
+        p = PlayerModel(
+            id=person_id,
+            last_name=d.get("player_last_name") if d.get("player_last_name") is not None else d.get("PLAYER_LAST_NAME"),
+            first_name=d.get("player_first_name") if d.get("player_first_name") is not None else d.get("PLAYER_FIRST_NAME"),
+            player_slug=d.get("player_slug") if d.get("player_slug") is not None else d.get("PLAYER_SLUG"),
+            team_id=to_int(d.get("team_id") or d.get("TEAM_ID")),
+            team_slug=d.get("team_slug") if d.get("team_slug") is not None else d.get("TEAM_SLUG"),
+            is_defunct=to_bool(d.get("is_defunct") if "is_defunct" in d else d.get("IS_DEFUNCT")),
+            team_city=d.get("team_city") if d.get("team_city") is not None else d.get("TEAM_CITY"),
+            team_name=d.get("team_name") if d.get("team_name") is not None else d.get("TEAM_NAME"),
+            team_abbreviation=d.get("team_abbreviation") if d.get("team_abbreviation") is not None else d.get("TEAM_ABBREVIATION"),
+            jersey_number=d.get("jersey_numbe   r") if d.get("jersey_number") is not None else d.get("JERSEY_NUMBER"),
+            position=d.get("position") if d.get("position") is not None else d.get("POSITION"),
+            height=d.get("height") if d.get("height") is not None else d.get("HEIGHT"),
+            weight=(d.get("weight") if d.get("weight") is not None else d.get("WEIGHT")),
+            college=d.get("college") if d.get("college") is not None else d.get("COLLEGE"),
+            country=d.get("country") if d.get("country") is not None else d.get("COUNTRY"),
+            draft_year=to_int(d.get("draft_year") or d.get("DRAFT_YEAR")),
+            draft_round=to_int(d.get("draft_round") or d.get("DRAFT_ROUND")),
+            draft_number=to_int(d.get("draft_number") or d.get("DRAFT_NUMBER")),
+            roster_status=d.get("roster_status") if d.get("roster_status") is not None else d.get("ROSTER_STATUS"),
+            pts=to_float(d.get("pts") or d.get("PTS")),
+            reb=to_float(d.get("reb") or d.get("REB")),
+            ast=to_float(d.get("ast") or d.get("AST")),
+            stats_timeframe=d.get("stats_timeframe") if d.get("stats_timeframe") is not None else d.get("STATS_TIMEFRAME"),
+            from_year=to_int(d.get("from_year") or d.get("FROM_YEAR")),
+            to_year=to_int(d.get("to_year") or d.get("TO_YEAR")),
+        )
+        return p
 
-            row = [
-                person_id,
-                sleeper_int,
-                d.get("player_last_name") if d.get("player_last_name") is not None else d.get("PLAYER_LAST_NAME"),
-                d.get("player_first_name") if d.get("player_first_name") is not None else d.get("PLAYER_FIRST_NAME"),
-                d.get("player_slug") if d.get("player_slug") is not None else d.get("PLAYER_SLUG"),
-                to_int(d.get("team_id") or d.get("TEAM_ID")),
-                d.get("team_slug") if d.get("team_slug") is not None else d.get("TEAM_SLUG"),
-                to_bool(d.get("is_defunct") if "is_defunct" in d else d.get("IS_DEFUNCT")),
-                d.get("team_city") if d.get("team_city") is not None else d.get("TEAM_CITY"),
-                d.get("team_name") if d.get("team_name") is not None else d.get("TEAM_NAME"),
-                d.get("team_abbreviation") if d.get("team_abbreviation") is not None else d.get("TEAM_ABBREVIATION"),
-                to_int(d.get("jersey_number") or d.get("JERSEY_NUMBER")),
-                d.get("position") if d.get("position") is not None else d.get("POSITION"),
-                d.get("height") if d.get("height") is not None else d.get("HEIGHT"),
-                to_int(d.get("weight") or d.get("WEIGHT")),
-                d.get("college") if d.get("college") is not None else d.get("COLLEGE"),
-                d.get("country") if d.get("country") is not None else d.get("COUNTRY"),
-                to_int(d.get("draft_year") or d.get("DRAFT_YEAR")),
-                to_int(d.get("draft_round") or d.get("DRAFT_ROUND")),
-                to_int(d.get("draft_number") or d.get("DRAFT_NUMBER")),
-                d.get("roster_status") if d.get("roster_status") is not None else d.get("ROSTER_STATUS"),
-                to_float(d.get("pts") or d.get("PTS")),
-                to_float(d.get("reb") or d.get("REB")),
-                to_float(d.get("ast") or d.get("AST")),
-                d.get("stats_timeframe") if d.get("stats_timeframe") is not None else d.get("STATS_TIMEFRAME"),
-                to_int(d.get("from_year") or d.get("FROM_YEAR")),
-                to_int(d.get("to_year") or d.get("TO_YEAR")),
-                datetime.utcnow(),
-            ]
-            rows.append(tuple(row))
-        return rows
+    players_entities = [e for e in (make_entity(b, require_sleeper_not_null=True) for b in in_both) if e is not None]
+    unrecognized_entities = [e for e in (make_entity(b, require_sleeper_not_null=False) for b in not_in_sleeper) if e is not None]
 
-    players_rows = make_rows(in_both, require_sleeper_not_null=True)
-    unrecognized_rows = make_rows(not_in_sleeper, require_sleeper_not_null=False)
+    # Build sleeper mappings: (player_id, sleeper_id) from in_both entries
+    sleeper_mappings = []
+    for b in in_both:
+        d = b.to_dict() if hasattr(b, 'to_dict') else dict(b)
+        pid = to_int(d.get('person_id') or d.get('id'))
+        sid = to_int(d.get('sleeper_id') or d.get('player_id'))
+        if pid is not None and sid is not None:
+            sleeper_mappings.append({'player_id': pid, 'sleeper_id': sid})
 
+    # persist
+    session = _get_db_session()
+    repo = PlayerRepository(session)
+
+    inserted_players = 0
+    inserted_unrecognized = 0
+    inserted_sleeper_mappings = 0
     try:
+        # bulk upsert into players table (accepts model instances)
+        inserted_players = repo.bulk_upsert(PlayerModel, players_entities)
 
-        cur = db_conn.cursor()
+        # bulk upsert into unrecognized_players table (table name string)
+        inserted_unrecognized = repo.bulk_upsert('unrecognized_players', unrecognized_entities)
 
-        # create tables with individual columns for each field (lowercase)
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS players (
-            person_id INTEGER PRIMARY KEY,
-            sleeper_id INTEGER NOT NULL,
-            player_last_name TEXT,
-            player_first_name TEXT,
-            player_slug TEXT,
-            team_id INTEGER,
-            team_slug TEXT,
-            is_defunct BOOLEAN,
-            team_city TEXT,
-            team_name TEXT,
-            team_abbreviation TEXT,
-            jersey_number INTEGER,
-            position TEXT,
-            height TEXT,
-            weight INTEGER,
-            college TEXT,
-            country TEXT,
-            draft_year INTEGER,
-            draft_round INTEGER,
-            draft_number INTEGER,
-            roster_status TEXT,
-            pts REAL,
-            reb REAL,
-            ast REAL,
-            stats_timeframe TEXT,
-            from_year INTEGER,
-            to_year INTEGER,
-            date_inserted TIMESTAMPTZ NOT NULL
-        )
-        """)
-        cur.execute("""
-        CREATE TABLE IF NOT EXISTS "unrecognized_players" (
-            person_id INTEGER PRIMARY KEY,
-            sleeper_id INTEGER,
-            player_last_name TEXT,
-            player_first_name TEXT,
-            player_slug TEXT,
-            team_id INTEGER,
-            team_slug TEXT,
-            is_defunct BOOLEAN,
-            team_city TEXT,
-            team_name TEXT,
-            team_abbreviation TEXT,
-            jersey_number INTEGER,
-            position TEXT,
-            height TEXT,
-            weight INTEGER,
-            college TEXT,
-            country TEXT,
-            draft_year INTEGER,
-            draft_round INTEGER,
-            draft_number INTEGER,
-            roster_status TEXT,
-            pts REAL,
-            reb REAL,
-            ast REAL,
-            stats_timeframe TEXT,
-            from_year INTEGER,
-            to_year INTEGER,
-            date_inserted TIMESTAMPTZ NOT NULL
-        )
-        """)
-
-        inserted_players = 0
-        inserted_unrecognized = 0
-
-        if players_rows:
-            insert_sql = f"""
-            INSERT INTO players ({', '.join(fields)}, date_inserted)
-            VALUES %s
-            ON CONFLICT (person_id) DO NOTHING
-            RETURNING person_id
-            """
-            execute_values(cur, insert_sql, players_rows, page_size=100)
-            returned = cur.fetchall()
-            inserted_players = len(returned)
-
-
-        if unrecognized_rows:
-            insert_sql_unrec = f"""
-            INSERT INTO "unrecognized_players" ({', '.join(fields)}, date_inserted)
-            VALUES %s
-            ON CONFLICT (person_id) DO NOTHING
-            RETURNING person_id
-            """
-            execute_values(cur, insert_sql_unrec, unrecognized_rows, page_size=100)
-            returned_unrec = cur.fetchall()
-            inserted_unrecognized = len(returned_unrec)
+        # bulk insert sleeper mappings into sleeper_player_ids table
+        if sleeper_mappings:
+            inserted_sleeper_mappings = repo.bulk_upsert('sleeper_player_ids', sleeper_mappings)
     except Exception as e:
-        logger.error("error inserting players: %s", str(e))
+        if logger:
+            logger.error("error inserting players (bulk upsert): %s", str(e))
+        else:
+            print("error inserting players:", str(e))
     finally:
-        pass
+        session.close()
+
     # log only the numbers of newly-inserted players
     if logger:
-        logger.info("inserted %d new players and %d unrecognized players", inserted_players, inserted_unrecognized)
+        logger.info("inserted %d new players, %d unrecognized players, and %d sleeper mappings", inserted_players, inserted_unrecognized, inserted_sleeper_mappings)
     else:
         # fallback for environments without a logger
         print(inserted_players)
         print(inserted_unrecognized)
+        print(inserted_sleeper_mappings)
 
-    return inserted_players, inserted_unrecognized
+    return inserted_players, inserted_unrecognized, inserted_sleeper_mappings

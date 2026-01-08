@@ -13,6 +13,9 @@ from .db_logging import DBHandler
 import io
 import os
 import yaml as _yaml
+import sys
+import io
+import traceback
 
 loud_sh = wrap_module_with_decorator('sh', loudspeaker)
 
@@ -34,6 +37,17 @@ def _read_dsn() -> str:
                     return data["dsn"]
     raise RuntimeError("dsn not found in config.yaml")
 
+def describe_exception(exc) -> str:
+    writer = io.StringIO()
+    exc_type, exc_obj, exc_tb = sys.exc_info()
+    writer.writelines(traceback.format_exception(exc_type, exc_obj, exc_tb))
+    writer.writelines([
+        str(exc),
+        f"Error Type: {exc_type.__name__}",
+        f"File Name: {exc_tb.tb_frame.f_code.co_filename}",
+        f"Line Number: {exc_tb.tb_lineno}"])
+    writer.seek(0)
+    return writer.read()
 
 def job_runner(job_type: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Decorator factory that logs script execution to the `jobs` table.
@@ -119,7 +133,9 @@ def job_runner(job_type: str) -> Callable[[Callable[..., Any]], Callable[..., An
                         # Rollback transactional work
                         app_conn.rollback()
                         # Record failure and the error message (truncate if necessary)
-                        err_text = str(exc)
+                        err_text = describe_exception(exc)
+                        logger = logger_factory(func.__module__)
+                        logger.error(err_text)
                         if len(err_text) > 2000:
                             err_text = err_text[:2000]
                         log_cur.execute(
@@ -167,5 +183,6 @@ def games(*args, **kwargs):
     be imported and tested independently from the CLI. The decorator supplies the
     transactional `db_conn` argument.
     """
+    print("asdf")
     inserted = games_update(*args, **kwargs)
     click.echo(str(inserted))

@@ -11,7 +11,8 @@ dependencies = [
     "click",
     "sh",
     "rich",
-    "PyYAML"
+    "PyYAML",
+    "parsedatetime>=2.6",
 ]
 
 [build-system]

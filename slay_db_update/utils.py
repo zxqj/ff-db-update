@@ -1,3 +1,4 @@
+from enum import IntEnum
 from json import JSONDecodeError
 
 from box import Box
@@ -6,7 +7,41 @@ import functools
 import inspect
 import logging
 from typing import Optional, Callable, Any
-import json
+from pathlib import Path
+
+
+def parse_intenum(enum_cls, value_str):
+    """
+    Parse a string into an IntEnum member.
+
+    Args:
+        enum_cls: The IntEnum class to parse into.
+        value_str: The string representation (name or integer value).
+
+    Returns:
+        An instance of enum_cls.
+
+    Raises:
+        ValueError: If the string cannot be parsed into a valid enum member.
+    """
+    if not issubclass(enum_cls, IntEnum):
+        raise TypeError(f"{enum_cls.__name__} is not an IntEnum subclass")
+
+    # Try parsing by name (case-sensitive)
+    try:
+        return enum_cls[value_str.upper()]
+    except KeyError:
+        pass  # Not a valid name
+
+    # Try parsing by integer value
+    try:
+        int_value = int(value_str)
+        return enum_cls(int_value)
+    except (ValueError, KeyError):
+        pass  # Not a valid integer or not in enum
+
+    # If both attempts fail, raise an error
+    raise ValueError(f"'{value_str}' is not a valid {enum_cls.__name__}")
 
 def get_nba_stats_result(endpoint, result_set_name = None):
     box = Box(**endpoint.get_dict())
@@ -22,14 +57,39 @@ def get_nba_stats_result(endpoint, result_set_name = None):
 def invoke_endpoint(class_ref, logger, **kwargs):
     name = class_ref.__name__
     def f(**_kwargs):
+        # Avoid printing huge kwargs directly; just show the names
         try:
             return class_ref(**_kwargs)
         except JSONDecodeError as e:
-            argstr = ",".join([f"{k}: {json.dumps(v)}" for k, v in kwargs.items()])
+            argstr = ",".join([f"{k}: {str(v)[:100]}" for k, v in kwargs.items()])
             raise RuntimeError(f"JSON decode error invoking {name} with args {argstr}") from e
 
     invoker = timed(name, logger)(f)
     return get_nba_stats_result(invoker(**kwargs), result_set_name=name)
+
+def find_project_root(start: Optional[Path | str] = None) -> Path:
+    """Walk up from `start` (or this file's parent) to find a directory that contains
+    both a `.git` directory and either a `pyproject.yaml` (preferred per request)
+    or `pyproject.toml`. Returns the Path to that directory. Raises RuntimeError if none is found.
+
+    """
+    if start is None:
+        p = Path(__file__).resolve().parent
+    else:
+        p = Path(start).resolve()
+        if p.is_file():
+            p = p.parent
+
+    root = p
+    while True:
+        git_dir = root / '.git'
+        pyproject_yaml = root / 'pyproject.yaml'
+        pyproject_toml = root / 'pyproject.toml'
+        if git_dir.is_dir() and (pyproject_yaml.is_file() or pyproject_toml.is_file()):
+            return root
+        if root.parent == root:
+            raise RuntimeError('project root with .git and pyproject.yaml/pyproject.toml not found')
+        root = root.parent
 
 def timed(identifier: str, logger: Optional[logging.Logger]):
     """
@@ -77,4 +137,3 @@ def timed(identifier: str, logger: Optional[logging.Logger]):
                 return result
             return wrapper
     return decorator
-

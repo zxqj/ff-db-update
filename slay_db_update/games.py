@@ -1,8 +1,81 @@
-from datetime import datetime
-from psycopg2.extras import execute_values
-from nba_api.stats.endpoints.playergamelogs import PlayerGameLogs
-from .utils import get_nba_stats_result, timed, invoke_endpoint
+from datetime import datetime, timezone
 
+import json
+
+from src.nba_api.stats.endpoints import LeagueGameFinder
+from .configuration import _get_db_session
+from .nba_season import NBASeason
+from nba_api.stats.library.parameters import SeasonTypeAllStar, SeasonTypePlayoffs
+from sqlalchemy import func
+
+# new imports for repository access
+from .players_repo import PlayerRepository
+from .game_stats_repo import GameStatsRepository
+from .game_stats import GameStats
+import NBAStatsAPI
+
+def json_dump(o):
+    def serialize_datetime(obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        raise TypeError("Type not serializable")
+    return json.dumps(o, default=serialize_datetime)
+
+def get_date_season(date):
+    year = date.year
+    month = date.month
+    if month >= 10:
+        return f"{year}-{str(year+1)[2:]}"
+    else:
+        return f"{year-1}-{str(year)[2:]}"
+
+def get_all_games_bulk_import(logger, from_season: NBASeason):
+    """
+    When making multiple consecutive requests to the API, sometimes it stop responding.
+    The initial import of data will have to be done with care to minimize the number of
+    requests and potentially throttle them.  The maximum number rows returned in a request
+    is 30000.  This is enough to accommodate all players' games (playoffs, regular season,
+    pre-season, play-in, all-star) for a single season, up until the year 2011.
+
+    The season id is given in the format xYYYY where YYYY is the beginning year of the
+    season and x is a code that indicates the part of season:
+    1 - Pre Season
+    2 - Regular Season
+    3 - All Star
+    4 - Playoffs
+    5 - Play In
+    """
+    args = dict(league_id_nullable='00', player_or_team_abbreviation='P', season_nullable=str(from_season)
+    pass
+
+
+def get_all_games(logger, season_type = None, player=None, date_from=None):
+    """Return all games for a player (mapping with 'id') starting from a date.
+
+    `player` may be a mapping with keys 'id' and 'draft_year' or None.
+    """
+    l = []
+    # start_season = NBASeason(draft_year) if date_from is None else NBASeason(date_from)
+
+    args = dict(league_id_nullable='00', player_or_team_abbreviation='P')
+
+    if season_type is not None:
+        args['season_type_nullable'] = season_type
+    if date_from is not None:
+        args['date_from_nullable'] = date_from
+    if player is not None:
+        # player may be mapping or object with id attribute
+        try:
+            pid = player.get('id') if isinstance(player, dict) else getattr(player, 'id', None)
+        except Exception:
+            pid = None
+        if pid is not None:
+            args['player_id_nullable'] = pid
+    for game in NBAStatsAPI.invoke_endpoint(LeagueGameFinder, logger, **args):
+        # attempt to set season_type; allow mapping or object
+        if season_type is not SeasonTypePlayoffs.preseason and (game.season_type() is not SeasonTypePlayoffs.preseason):
+            l.append(game)
+    return l
 
 def update(db_conn=None, logger_factory=None):
     """Download and insert player game logs for all players in the DB.
@@ -14,36 +87,20 @@ def update(db_conn=None, logger_factory=None):
 
     logger = logger_factory(__name__)
 
-    # gather player ids from players and unrecognized players (if that table exists)
-    player_ids = set()
-    cur = db_conn.cursor()
-    try:
-        cur.execute('SELECT person_id FROM players')
-        rows = cur.fetchall()
-        for (pid,) in rows:
-            if pid is not None:
-                player_ids.add(int(pid))
-    except Exception:
-        # if players table doesn't exist or other error, re-raise
-        raise
+    # gather players from the players table using SQLAlchemy repository
+    session = _get_db_session()
+    repo = PlayerRepository(session)
+    gs_repo = GameStatsRepository(session)
+    players = repo.fetchAll()
 
-    # try to include unrecognized players table if present
-    try:
-        cur.execute('SELECT person_id FROM "unrecognized_players"')
-        rows = cur.fetchall()
-        for (pid,) in rows:
-            if pid is not None:
-                player_ids.add(int(pid))
-    except Exception:
-        # ignore if table doesn't exist
-        pass
-
-    if not player_ids:
+    if not players:
         if logger:
             logger.debug("no players found in database")
+        session.close()
         return 0
 
     total_inserted = 0
+    logger.info(f"There are indeed {len(players)} players")
 
     # helper coercions
     def to_int(v):
@@ -62,146 +119,124 @@ def update(db_conn=None, logger_factory=None):
         except Exception:
             return None
 
-    # columns in player_games (excluding date_inserted)
-    columns = [
-        'season_year', 'player_id', 'player_name', 'team_id', 'team_abbreviation', 'team_name',
-        'game_id', 'game_date', 'matchup', 'wl', 'min', 'fgm', 'fga', 'fg_pct', 'fg3m', 'fg3a', 'fg3_pct',
-        'ftm', 'fta', 'ft_pct', 'oreb', 'dreb', 'reb', 'ast', 'tov', 'stl', 'blk', 'blka', 'pf', 'pfd', 'pts',
-        'plus_minus', 'nba_fantasy_pts', 'dd2', 'td3', 'gp_rank', 'w_rank', 'l_rank', 'w_pct_rank', 'min_rank',
-        'fgm_rank', 'fga_rank', 'fg_pct_rank', 'fg3m_rank', 'fg3a_rank', 'fg3_pct_rank', 'ftm_rank', 'fta_rank',
-        'ft_pct_rank', 'oreb_rank', 'dreb_rank', 'reb_rank', 'ast_rank', 'tov_rank', 'stl_rank', 'blk_rank',
-        'blka_rank', 'pf_rank', 'pfd_rank', 'pts_rank', 'plus_minus_rank', 'nba_fantasy_pts_rank', 'dd2_rank',
-        'td3_rank'
-    ]
+    def parse_date(s):
+        if s is None:
+            return None
+        if isinstance(s, datetime):
+            return s.date()
+        try:
+            # try ISO formats first
+            return datetime.fromisoformat(s).date()
+        except Exception:
+            try:
+                return datetime.strptime(s, "%Y-%m-%d").date()
+            except Exception:
+                return None
 
-    insert_sql = f"""
-    INSERT INTO player_games ({', '.join(columns)}, date_inserted)
-    VALUES %s
-    ON CONFLICT (player_id, game_id) DO NOTHING
-    RETURNING player_id
-    """
-
-    for pid in sorted(player_ids):
-        # find most recent game_date for this player
-        cur.execute('SELECT MAX(game_date) FROM player_games WHERE player_id = %s', (pid,))
-        last_row = cur.fetchone()
-        last_date = last_row[0] if last_row is not None else None
-        date_from = ''
+    for player in sorted(players, key=lambda p: p.id):
+        # find most recent game_date for this player using SQLAlchemy session
+        last_date = session.query(func.max(GameStats.game_date)).filter(GameStats.player_id == player.id).scalar()
+        date_from = None
         if last_date is not None:
             # pass ISO date string
             date_from = last_date.isoformat()
 
         # request player game logs
         try:
-            games = invoke_endpoint(PlayerGameLogs, logger, player_id_nullable=pid, date_from_nullable=date_from)
+            logger.info("get all games for player %s", player.id)
+            games = get_all_games(logger, player={'id': player.id, 'draft_year': player.draft_year}, date_from=date_from)
         except Exception:
-            logger.warning("failed to retrieve games for player %s", pid, exc_info=True)
+            logger.warning("failed to retrieve games for player %s", player.id, exc_info=True)
             continue
 
         if not games:
             if logger:
-                logger.debug("no games returned for player %s", pid)
+                logger.debug("no games returned for player %s", player.id)
             continue
 
-        rows_to_insert = []
+        gs_list = []
         for g in games:
-            # g is a dict-like mapping with lowercase keys
-            season_year = g.get('season_year')
-            player_id = to_int(g.get('player_id'))
-            player_name = g.get('player_name')
-            team_id = to_int(g.get('team_id'))
-            team_abbreviation = g.get('team_abbreviation')
-            team_name = g.get('team_name')
-            game_id = g.get('game_id')
-            game_date = g.get('game_date')
-            matchup = g.get('matchup')
-            wl = g.get('wl')
-            min_ = g.get('min')
-            fgm = to_int(g.get('fgm'))
-            fga = to_int(g.get('fga'))
-            fg_pct = to_float(g.get('fg_pct'))
-            fg3m = to_int(g.get('fg3m'))
-            fg3a = to_int(g.get('fg3a'))
-            fg3_pct = to_float(g.get('fg3_pct'))
-            ftm = to_int(g.get('ftm'))
-            fta = to_int(g.get('fta'))
-            ft_pct = to_float(g.get('ft_pct'))
-            oreb = to_int(g.get('oreb'))
-            dreb = to_int(g.get('dreb'))
-            reb = to_int(g.get('reb'))
-            ast = to_int(g.get('ast'))
-            tov = to_int(g.get('tov'))
-            stl = to_int(g.get('stl'))
-            blk = to_int(g.get('blk'))
-            blka = to_int(g.get('blka'))
-            pf = to_int(g.get('pf'))
-            pfd = to_int(g.get('pfd'))
-            pts = to_int(g.get('pts'))
-            plus_minus = to_float(g.get('plus_minus'))
-            nba_fantasy_pts = to_float(g.get('nba_fantasy_pts'))
-            dd2 = to_int(g.get('dd2'))
-            td3 = to_int(g.get('td3'))
-            gp_rank = to_int(g.get('gp_rank'))
-            w_rank = to_int(g.get('w_rank'))
-            l_rank = to_int(g.get('l_rank'))
-            w_pct_rank = to_float(g.get('w_pct_rank'))
-            min_rank = to_int(g.get('min_rank'))
-            fgm_rank = to_int(g.get('fgm_rank'))
-            fga_rank = to_int(g.get('fga_rank'))
-            fg_pct_rank = to_float(g.get('fg_pct_rank'))
-            fg3m_rank = to_int(g.get('fg3m_rank'))
-            fg3a_rank = to_int(g.get('fg3a_rank'))
-            fg3_pct_rank = to_float(g.get('fg3_pct_rank'))
-            ftm_rank = to_int(g.get('ftm_rank'))
-            fta_rank = to_int(g.get('fta_rank'))
-            ft_pct_rank = to_float(g.get('ft_pct_rank'))
-            oreb_rank = to_int(g.get('oreb_rank'))
-            dreb_rank = to_int(g.get('dreb_rank'))
-            reb_rank = to_int(g.get('reb_rank'))
-            ast_rank = to_int(g.get('ast_rank'))
-            tov_rank = to_int(g.get('tov_rank'))
-            stl_rank = to_int(g.get('stl_rank'))
-            blk_rank = to_int(g.get('blk_rank'))
-            blka_rank = to_int(g.get('blka_rank'))
-            pf_rank = to_int(g.get('pf_rank'))
-            pfd_rank = to_int(g.get('pfd_rank'))
-            pts_rank = to_int(g.get('pts_rank'))
-            plus_minus_rank = to_float(g.get('plus_minus_rank'))
-            nba_fantasy_pts_rank = to_float(g.get('nba_fantasy_pts_rank'))
-            dd2_rank = to_int(g.get('dd2_rank'))
-            td3_rank = to_int(g.get('td3_rank'))
-
-            row = (
-                season_year, player_id, player_name, team_id, team_abbreviation, team_name,
-                game_id, game_date, matchup, wl, min_, fgm, fga, fg_pct, fg3m, fg3a, fg3_pct,
-                ftm, fta, ft_pct, oreb, dreb, reb, ast, tov, stl, blk, blka, pf, pfd, pts,
-                plus_minus, nba_fantasy_pts, dd2, td3, gp_rank, w_rank, l_rank, w_pct_rank, min_rank,
-                fgm_rank, fga_rank, fg_pct_rank, fg3m_rank, fg3a_rank, fg3_pct_rank, ftm_rank, fta_rank,
-                ft_pct_rank, oreb_rank, dreb_rank, reb_rank, ast_rank, tov_rank, stl_rank, blk_rank,
-                blka_rank, pf_rank, pfd_rank, pts_rank, plus_minus_rank, nba_fantasy_pts_rank, dd2_rank,
-                td3_rank, datetime.utcnow()
-            )
-            rows_to_insert.append(row)
-
-        if rows_to_insert:
-            try:
-                execute_values(cur, insert_sql, rows_to_insert, page_size=100)
-                # fetch returned rows to count inserts
+            # g is a dict-like mapping with lowercase keys or a Box; use .get if available
+            def gget(key):
                 try:
-                    returned = cur.fetchall()
-                    inserted_count = len(returned)
+                    return g.get(key)
                 except Exception:
-                    # if RETURNING wasn't supported for some reason, fallback to rowcount
-                    inserted_count = cur.rowcount if cur.rowcount > 0 else 0
+                    try:
+                        return getattr(g, key)
+                    except Exception:
+                        # try upper-case header
+                        try:
+                            return g.get(key.upper())
+                        except Exception:
+                            return None
+
+            season_id = gget('season_id')
+            player_id = to_int(gget('player_id') or gget('playerid') or gget('player_id'))
+            game_id = gget('game_id') or gget('gameid') or gget('game_id')
+            game_date = parse_date(gget('game_date'))
+            matchup = gget('matchup')
+            wl = gget('wl')
+            min_ = gget('min')
+            fgm = to_int(gget('fgm'))
+            fga = to_int(gget('fga'))
+            fg_pct = to_float(gget('fg_pct'))
+            fg3m = to_int(gget('fg3m'))
+            fg3a = to_int(gget('fg3a'))
+            fg3_pct = to_float(gget('fg3_pct'))
+            ftm = to_int(gget('ftm'))
+            fta = to_int(gget('fta'))
+            ft_pct = to_float(gget('ft_pct'))
+            oreb = to_int(gget('oreb'))
+            dreb = to_int(gget('dreb'))
+            reb = to_int(gget('reb'))
+            ast = to_int(gget('ast'))
+            tov = to_int(gget('tov'))
+            stl = to_int(gget('stl'))
+            blk = to_int(gget('blk'))
+            pf = to_int(gget('pf'))
+            pts = to_int(gget('pts'))
+            plus_minus = to_float(gget('plus_minus'))
+
+            gs = GameStats()
+            gs.season_id = season_id
+            gs.player_id = player_id
+            gs.game_id = str(game_id) if game_id is not None else None
+            gs.game_date = game_date
+            gs.matchup = matchup
+            gs.wl = wl
+            gs.min = str(min_) if min_ is not None else None
+            gs.fgm = fgm
+            gs.fga = fga
+            gs.fg_pct = fg_pct
+            gs.fg3m = fg3m
+            gs.fg3a = fg3a
+            gs.fg3_pct = fg3_pct
+            gs.ftm = ftm
+            gs.fta = fta
+            gs.ft_pct = ft_pct
+            gs.oreb = oreb
+            gs.dreb = dreb
+            gs.reb = reb
+            gs.ast = ast
+            gs.tov = tov
+            gs.stl = stl
+            gs.blk = blk
+            gs.pf = pf
+            gs.pts = pts
+            gs.plus_minus = plus_minus
+
+            gs_list.append(gs)
+
+        if gs_list:
+            try:
+                inserted_count = gs_repo.add(gs_list)
                 total_inserted += inserted_count
                 if logger:
-                    logger.info("inserted %d new games for player %s", inserted_count, pid)
-                # commit after each player to keep work small
-                db_conn.commit()
+                    logger.info("inserted %d new games for player %s", inserted_count, player.id)
             except Exception as exc:
-                # rollback on failure for this player's batch and continue
-                db_conn.rollback()
                 if logger:
-                    logger.exception("failed to insert games for player %s: %s", pid, exc)
+                    logger.exception("failed to insert games for player %s: %s", player.id, exc)
+                # continue to next player on error
                 continue
+    session.close()
     return total_inserted
