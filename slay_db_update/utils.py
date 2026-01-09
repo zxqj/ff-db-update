@@ -1,3 +1,6 @@
+import io
+import sys
+import traceback
 from enum import IntEnum
 from json import JSONDecodeError
 
@@ -137,3 +140,16 @@ def timed(identifier: str, logger: Optional[logging.Logger]):
                 return result
             return wrapper
     return decorator
+
+
+def describe_exception(exc) -> str:
+    writer = io.StringIO()
+    exc_type, exc_obj, exc_tb = sys.exc_info()
+    writer.writelines(traceback.format_exception(exc_type, exc_obj, exc_tb))
+    writer.writelines([
+        str(exc),
+        f"Error Type: {exc_type.__name__}",
+        f"File Name: {exc_tb.tb_frame.f_code.co_filename}",
+        f"Line Number: {exc_tb.tb_lineno}"])
+    writer.seek(0)
+    return writer.read()

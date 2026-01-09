@@ -63,7 +63,7 @@ def pull_full(logger, from_season: NBASeason, game_repository: GameStatsReposito
     season = from_season
     while season <= NBASeason():
         args = game_finder_args(season_nullable=season)
-        print(args)
+
         if date_from is not None:
             args['date_from_nullable'] = date_from.isoformat()
         # After 2011, the full season began having more than 30,000 player-games, and
@@ -72,12 +72,15 @@ def pull_full(logger, from_season: NBASeason, game_repository: GameStatsReposito
         if season <= 2011:
             games: list[LeagueGameFinderResults] = [*NBAStatsAPI.invoke_endpoint(LeagueGameFinder, LeagueGameFinderResults, logger, **args)]
             logger.info(f"Found {len(games)} games for season {season}")
-            game_repository.add([mapper.map(game) for game in games])
+            game_repository.insert([mapper.map(game) for game in games])
         else:
             for season_type in [SeasonTypePlayoffs.regular, SeasonTypePlayoffs.playin, SeasonTypePlayoffs.playoffs]:
-                games: list[LeagueGameFinderResults] = [*NBAStatsAPI.invoke_endpoint(LeagueGameFinder, logger, **args)]
+                games: list[LeagueGameFinderResults] = [*NBAStatsAPI.invoke_endpoint(LeagueGameFinder, LeagueGameFinderResults, logger, **args)]
                 logger.info(f"Found {len(games)} games for season {season} and type {season_type}")
-                game_repository.add([mapper.map(game) for game in games])
+                game_repository.insert([mapper.map(game) for game in games])
+
+        Config.get().get_session().commit()
+
         # if we have more seasons to go, the rest are full seasons, or a season we're in the middle of
         date_from = None
         season = season + 1
@@ -94,9 +97,9 @@ def update(db_conn=None, logger_factory=None):
     logger = logger_factory(__name__)
 
     # gather players from the players table using SQLAlchemy repository
-    conf = Config.from_yaml()
+    conf = Config.get()
     session = conf.get_session()
     gs_repo = GameStatsRepository(session)
     newest_date: Optional[date] = gs_repo.get_newest_game_date()
-    season = NBASeason(Config.from_yaml().start_year) if newest_date is None else NBASeason(newest_date.year)
+    season = NBASeason(Config.get().start_year) if newest_date is None else NBASeason(newest_date.year)
     pull_full(logger, season, gs_repo, newest_date)

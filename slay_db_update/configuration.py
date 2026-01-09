@@ -1,8 +1,10 @@
+from logging import Logger
 from pathlib import Path
+from typing import Optional, Callable
 
 import yaml
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, Session
 from dataclasses import dataclass
 from slay_db_update.utils import find_project_root
 
@@ -11,9 +13,19 @@ class Config:
     dsn: str
     start_year: int
     team_ids: list[int]
+    logger_factory: Optional[Callable[[str],Logger]] = None
+    session: Optional[Session] = None
+
+    def set_logger_factory(self, logger_factory: Callable[[str],Logger]) -> None:
+        self.logger_factory = logger_factory
+
+    def get_logger(self, name: str):
+        if self.logger_factory is None:
+            raise ("logger_factory not defined")
+        return self.logger_factory(name)
 
     def get_session(self):
-        if hasattr(self, 'session'):
+        if self.session is not None:
             return self.session
 
         conn = self.dsn
@@ -25,7 +37,7 @@ class Config:
         return self.session
 
     @classmethod
-    def from_yaml(cls, path: Path = None) -> 'Config':
+    def get(cls, path: Path = None) -> 'Config':
         if hasattr(cls,'instance'):
             return cls.instance
 
@@ -42,4 +54,3 @@ class Config:
             team_ids=config_dict.get('team_ids', [])
         )
         return cls.instance
-

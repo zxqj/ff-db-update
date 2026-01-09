@@ -4,7 +4,7 @@ from .configuration import Config
 from .models import Player
 
 class PlayerRepository:
-    def __init__(self, session: Session=Config.from_yaml().get_session()):
+    def __init__(self, session: Session=Config.get().get_session()):
         self.session = session
 
     def create(self, p: Any) -> Player:

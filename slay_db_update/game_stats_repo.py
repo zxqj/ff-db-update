@@ -2,10 +2,15 @@ from typing import Optional, List, Union, Tuple, Callable, Any
 from dataclasses import dataclass
 from datetime import date
 from sqlalchemy.orm import Session
-from sqlalchemy import select, func
+from sqlalchemy import select, func, insert
+
+from .configuration import Config
 from .game_stats import GameStats
 from .NBAStatsModel import LeagueGameFinderResults
 from automapper import mapper
+import dataclasses
+
+from .utils import describe_exception
 
 _NUMERIC_COLS = [
     "fgm", "fga", "fg_pct", "fg3m", "fg3a", "fg3_pct", "ftm", "fta", "ft_pct",
@@ -42,40 +47,16 @@ class GameStatsRepository:
             return result[0]
         return None
 
-    def add(self, gs_or_list: Union[GameStats, List[GameStats]]) -> int:
-        """
-        Insert one or many GameStats. Creates new records where not found.
-        Returns number of newly-inserted rows.
-        """
-        inserted = 0
-        if isinstance(gs_or_list, list):
-            for gs in gs_or_list:
-                exists = self.session.query(GameStats).filter_by(player_id=gs.player_id, game_id=gs.game_id).one_or_none()
-                if exists is None:
-                    self.session.add(gs)
-                    inserted += 1
-                else:
-                    # update existing fields
-                    for col in gs.__table__.columns:
-                        if col.name in ("player_id", "game_id", "date_inserted"):
-                            continue
-                        setattr(exists, col.name, getattr(gs, col.name))
-            self.session.commit()
-            return inserted
-        else:
-            gs = gs_or_list
-            exists = self.session.query(GameStats).filter_by(player_id=gs.player_id, game_id=gs.game_id).one_or_none()
-            if exists is None:
-                self.session.add(gs)
-                self.session.commit()
-                return 1
-            else:
-                for col in gs.__table__.columns:
-                    if col.name in ("player_id", "game_id", "date_inserted"):
-                        continue
-                    setattr(exists, col.name, getattr(gs, col.name))
-                self.session.commit()
-                return 0
+
+    def insert(self, gs_or_list: Union[GameStats, List[GameStats]]) -> int:
+        if not isinstance(gs_or_list, list):
+            gs_or_list = [gs_or_list]
+        print(gs_or_list[0].__dict__)
+        try:
+            self.session.execute(insert(GameStats), [gs.__dict__ for gs in gs_or_list])
+        except Exception as e:
+            logger = Config.get().get_logger(__name__)
+            logger.error(describe_exception(e))
 
     def get(self, player_id: int, game_id: Union[int, str]) -> Optional[GameStats]:
         return self.session.query(GameStats).filter_by(player_id=player_id, game_id=str(game_id)).one_or_none()

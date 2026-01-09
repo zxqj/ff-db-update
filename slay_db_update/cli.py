@@ -1,5 +1,6 @@
 import click
 from .cli_tools import loudspeaker, wrap_module_with_decorator
+from .configuration import Config
 from .players import update as players_update
 from .games import update as games_update
 import functools
@@ -10,12 +11,9 @@ import logging
 from logging.config import dictConfig
 from .db_logging import DBHandler
 
-import io
-import os
 import yaml as _yaml
-import sys
-import io
-import traceback
+
+from .utils import describe_exception
 
 loud_sh = wrap_module_with_decorator('sh', loudspeaker)
 
@@ -37,17 +35,6 @@ def _read_dsn() -> str:
                     return data["dsn"]
     raise RuntimeError("dsn not found in config.yaml")
 
-def describe_exception(exc) -> str:
-    writer = io.StringIO()
-    exc_type, exc_obj, exc_tb = sys.exc_info()
-    writer.writelines(traceback.format_exception(exc_type, exc_obj, exc_tb))
-    writer.writelines([
-        str(exc),
-        f"Error Type: {exc_type.__name__}",
-        f"File Name: {exc_tb.tb_frame.f_code.co_filename}",
-        f"Line Number: {exc_tb.tb_lineno}"])
-    writer.seek(0)
-    return writer.read()
 
 def job_runner(job_type: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Decorator factory that logs script execution to the `jobs` table.
@@ -114,6 +101,8 @@ def job_runner(job_type: str) -> Callable[[Callable[..., Any]], Callable[..., An
                             handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
                             lg.addHandler(handler)
                             return lg
+
+                        Config.get().set_logger_factory(logger_factory)
 
                         if 'logger_factory' not in kwargs:
                             kwargs['logger_factory'] = logger_factory
