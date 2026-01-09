@@ -9,7 +9,6 @@ from sleeper_wrapper import Players
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from .dal_utils import DalUtils
 from .players_repo import PlayerRepository
 from .models import Player as PlayerModel
 import yaml
@@ -39,7 +38,7 @@ def _get_db_session(config_path=None):
     Session = sessionmaker(bind=engine)
     return Session()
 
-dal_utils = DalUtils()
+
 # python
 def update(db_conn=None, logger_factory=None):
     # Initialize logger via factory if provided; be defensive so this function

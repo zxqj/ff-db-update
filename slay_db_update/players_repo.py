@@ -1,11 +1,10 @@
 from typing import List, Optional, Any
 from sqlalchemy.orm import Session
-
-from .configuration import _get_db_session
+from .configuration import Config
 from .models import Player
 
 class PlayerRepository:
-    def __init__(self, session: Session=_get_db_session()):
+    def __init__(self, session: Session=Config.from_yaml().get_session()):
         self.session = session
 
     def create(self, p: Any) -> Player:

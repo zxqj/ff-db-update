@@ -4,8 +4,8 @@ from datetime import date
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func
 from .game_stats import GameStats
-from .NBAStatsModel import LeagueGameFinderResult
-from automapper import Mapper
+from .NBAStatsModel import LeagueGameFinderResults
+from automapper import mapper
 
 _NUMERIC_COLS = [
     "fgm", "fga", "fg_pct", "fg3m", "fg3a", "fg3_pct", "ftm", "fta", "ft_pct",
@@ -33,12 +33,14 @@ class GameStatsQuery:
 class GameStatsRepository:
     def __init__(self, session: Session):
         self.session = session
-        self._mapper = Mapper()
+        self._mapper = mapper.to(GameStats)
         # configure a simple mapping
-        self._mapper.create_map(LeagueGameFinderResult, GameStats)
 
-    def _to_model(self, league_obj: LeagueGameFinderResult) -> GameStats:
-        return self._mapper.map(league_obj, GameStats)
+    def get_newest_game_date(self) -> Optional[date]:
+        result = self.session.query(func.max(GameStats.game_date)).one_or_none()
+        if result is not None:
+            return result[0]
+        return None
 
     def add(self, gs_or_list: Union[GameStats, List[GameStats]]) -> int:
         """
@@ -136,6 +138,6 @@ class GameStatsRepository:
             q = q.limit(gsq.last_n)
         return q.all()
 
-    def map_from_league_result(self, league_obj: LeagueGameFinderResult) -> GameStats:
-        return self._to_model(league_obj)
+    def map_from_league_result(self, league_obj: LeagueGameFinderResults) -> GameStats:
+        return self._mapper.map(league_obj)
 

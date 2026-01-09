@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from enum import StrEnum, IntEnum, auto
 from typing import Self, Type, TypeAlias, TypeVar, Generator, Optional
 
-from src.nba_api.stats.library.parameters import SeasonTypePlayoffs
+from nba_api.stats.library.parameters import SeasonTypePlayoffs
 
 
 class TeamAbbreviation(IntEnum):
@@ -58,14 +58,14 @@ class NamedResultType:
         return cls(*data)
 
 @dataclass
-class LeagueGameFinderResult(NamedResultType):
+class LeagueGameFinderResults(NamedResultType):
     season_id: str
     player_id: int
     player_name: str
     team_id: int
     team_abbreviation: TeamAbbreviation
     team_name: str
-    game_id: int
+    game_id: str
     game_date: str
     matchup: str
     wl: Outcome
@@ -119,7 +119,7 @@ class NBAStatsAPIResultSet:
 
     def generator(self, t: Type[NamedResultType]) -> Generator[NamedResultType]:
         for row in self.rowSet:
-            args = {k: v for k, v in zip(self.headers, row)}
+            args = {k.lower(): v for k, v in zip(self.headers, row)}
             yield t(**args)
 
 
@@ -133,6 +133,9 @@ class NBAStatsAPIResponse:
 
     def get_result_set(self, t: Type[NRTDescendant]) -> NBAStatsAPIResultSet:
         for rs in self.resultSets:
-            if rs.name == t.result_type_name():
-                return rs
+            print(rs)
+            print(rs["name"])
+            print(t.result_type_name())
+            if rs["name"] == t.result_type_name():
+                return NBAStatsAPIResultSet(**rs)
         raise ValueError(f"ResultSet {t.result_type_name()} not found in response")
