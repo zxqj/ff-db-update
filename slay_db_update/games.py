@@ -74,7 +74,8 @@ def pull_full(logger, from_season: NBASeason, game_repository: GameStatsReposito
             logger.info(f"Found {len(games)} games for season {season}")
             game_repository.insert([mapper.map(game) for game in games])
         else:
-            for season_type in [SeasonTypePlayoffs.regular, SeasonTypePlayoffs.playin, SeasonTypePlayoffs.playoffs]:
+            for season_type in [SeasonTypePlayoffs.regular, SeasonTypePlayoffs.playoffs]:
+                args['season_type_nullable'] = season_type
                 games: list[LeagueGameFinderResults] = [*NBAStatsAPI.invoke_endpoint(LeagueGameFinder, LeagueGameFinderResults, logger, **args)]
                 logger.info(f"Found {len(games)} games for season {season} and type {season_type}")
                 game_repository.insert([mapper.map(game) for game in games])

@@ -51,7 +51,6 @@ class GameStatsRepository:
     def insert(self, gs_or_list: Union[GameStats, List[GameStats]]) -> int:
         if not isinstance(gs_or_list, list):
             gs_or_list = [gs_or_list]
-        print(gs_or_list[0].__dict__)
         try:
             self.session.execute(insert(GameStats), [gs.__dict__ for gs in gs_or_list])
         except Exception as e:
