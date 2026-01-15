@@ -1,6 +1,6 @@
 import re
-from datetime import datetime
-
+from datetime import datetime, date
+import parsedatetime
 
 class NBASeason(int):
     """An int subclass representing the starting year of an NBA season.
@@ -34,37 +34,18 @@ class NBASeason(int):
 
         # strings: attempt to interpret as season-range or date
         elif isinstance(value, str):
-            s = value.strip()
-            # strip common ordinal suffixes (1st, 2nd, 3rd, 4th)
-            s_clean = re.sub(r'(?<=\d)(st|nd|rd|th)', '', s, flags=re.IGNORECASE)
+            c = parsedatetime.Calendar()
+            value = c.parseDT(value)[0]
+            year = value.year
+            month = value.month
+            start_year = year if month >= 10 else year - 1
 
-            # match concise season forms like 25-26, 2025-26, 2025-2026, or single year like 2025
-            m = re.match(r'^(?P<y1>\d{2,4})(?:\s*[-–—]\s*(?P<y2>\d{2,4}))?$', s_clean)
-            if m:
-                y1 = m.group('y1')
+        elif isinstance(value, date):
+            year = value.year
+            month = value.month
+            start_year = year if month >= 10 else year - 1
 
-                def expand_year(y):
-                    if len(y) == 2:
-                        # assume 2000-based two digit year
-                        return 2000 + int(y)
-                    return int(y)
-
-                start_year = expand_year(y1)
-            else:
-                # fallback: try to parse as a date string
-                parsed = None
-                try:
-                    parsed = cls._parse_date(s_clean)
-                except Exception:
-                    raise ValueError(f"Could not parse season or date from: {value!r}")
-
-                year = parsed.year
-                month = parsed.month
-                start_year = year if month >= 10 else year - 1
-        else:
-            raise TypeError(f"Unsupported type for NBASeason: {type(value)!r}")
-
-        return super().__new__(cls, int(start_year))
+        return super().__new__(cls, start_year)
 
     @staticmethod
     def _parse_date(s):

@@ -2,13 +2,13 @@ from typing import Optional, List, Union, Tuple, Callable, Any
 from dataclasses import dataclass
 from datetime import date
 from sqlalchemy.orm import Session
-from sqlalchemy import select, func, insert
+from sqlalchemy import select, func, insert, delete
+from sqlalchemy.sql.dml import DMLWhereBase
 
 from .configuration import Config
 from .game_stats import GameStats
 from .NBAStatsModel import LeagueGameFinderResults
 from automapper import mapper
-import dataclasses
 
 from .utils import describe_exception
 
@@ -23,7 +23,7 @@ class GameStatsQuery:
     date_to: Optional[date] = None
     player: Optional[int] = None
     season: Optional[str] = None
-
+    game_id: Optional[int] = None
     regular_season: bool = True
     playoffs: bool = True
     playin: bool = True
@@ -34,11 +34,27 @@ class GameStatsQuery:
     # team: tuple(team_identifier, aggregation_function)
     team: Optional[Tuple[Any, Callable]] = None
 
+    def to_dml(self, d = None) -> DMLWhereBase:
+        dml = DMLWhereBase() if d is None else d
+        if self.game_id is not None:
+            dml = dml.where(GameStats.game_id == self.id)
+        if self.player is not None:
+            dml = dml.where(GameStats.player_id == self.player)
+        if self.season is not None:
+            dml = dml.where(GameStats.season_id == self.season)
+        if self.date_from is not None:
+            dml = dml.where(GameStats.game_date >= self.date_from)
+        if self.date_to is not None:
+            dml = dml.where(GameStats.game_date <= self.date_to)
+        return dml
+
+
 
 class GameStatsRepository:
-    def __init__(self, session: Session):
-        self.session = session
+    def __init__(self):
+        self.session = Config.get().get_session()
         self._mapper = mapper.to(GameStats)
+        self.logger = Config.get().get_logger(__name__)
         # configure a simple mapping
 
     def get_newest_game_date(self) -> Optional[date]:
@@ -59,6 +75,9 @@ class GameStatsRepository:
 
     def get(self, player_id: int, game_id: Union[int, str]) -> Optional[GameStats]:
         return self.session.query(GameStats).filter_by(player_id=player_id, game_id=str(game_id)).one_or_none()
+
+    def remove(self, gsq: GameStatsQuery):
+        self.session.execute(gsq.to_dml(delete(GameStats)))
 
     def search(self, gsq: GameStatsQuery) -> List[GameStats]:
         q = self.session.query(GameStats)
