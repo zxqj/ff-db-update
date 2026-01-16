@@ -1,8 +1,10 @@
 from dataclasses import dataclass
-from enum import StrEnum, IntEnum, auto
-from typing import Self, Type, TypeAlias, TypeVar, Generator, Optional
+from enum import IntEnum, auto, StrEnum
+from typing import Type, Self, Optional, TypeAlias
 
 from nba_api.stats.library.parameters import SeasonTypePlayoffs
+
+from slay_db_update.api_cli.nba_stats_response import NamedResultType
 
 
 class TeamAbbreviation(IntEnum):
@@ -44,18 +46,11 @@ class TeamAbbreviation(IntEnum):
             return cls[label]
         raise ValueError(f"{label} is not a valid TeamAbbreviation")
 
+
 class Outcome(StrEnum):
     WIN = "W"
     LOSS = "L"
 
-class NamedResultType:
-    @classmethod
-    def result_type_name(cls: Type[Self]) -> str:
-        return cls.__name__
-
-    @classmethod
-    def from_tuple(cls: Type[Self], data: tuple) -> Self:
-        return cls(*data)
 
 @dataclass
 class LeagueGameFinderResults(NamedResultType):
@@ -110,32 +105,3 @@ class LeagueGameFinderResults(NamedResultType):
     TupleType: TypeAlias = tuple[str, int, str, int, TeamAbbreviation, str, int, str, str, Outcome,
         int, float, float, float, float, float, float, float, float, float, float, float, float,
         float, float, float, float, float, float]
-
-@dataclass
-class NBAStatsAPIResultSet:
-    name: str
-    headers: list[str]
-    rowSet: list[list]
-
-    def generator(self, t: Type[NamedResultType]) -> Generator[NamedResultType]:
-        for row in self.rowSet:
-            args = {k.lower(): v for k, v in zip(self.headers, row)}
-            yield t(**args)
-
-
-
-NRTDescendant = TypeVar('NRTDescendant', bound=NamedResultType)
-@dataclass
-class NBAStatsAPIResponse:
-    resource: str
-    parameters: dict
-    resultSets: list[NBAStatsAPIResultSet]
-
-    def get_result_set(self, t: Type[NRTDescendant]) -> NBAStatsAPIResultSet:
-        for rs in self.resultSets:
-            print(rs)
-            print(rs["name"])
-            print(t.result_type_name())
-            if rs["name"] == t.result_type_name():
-                return NBAStatsAPIResultSet(**rs)
-        raise ValueError(f"ResultSet {t.result_type_name()} not found in response")

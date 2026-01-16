@@ -6,12 +6,10 @@ from nba_api.stats.endpoints.commonplayerinfo import CommonPlayerInfo
 from nba_api.stats.library.parameters import Active
 from sleeper_wrapper import Players
 # new imports for SQLAlchemy
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
-from .players_repo import PlayerRepository
-from .models import Player as PlayerModel
-import yaml
+from slay_db_update.conf import Config
+from slay_db_update.repo.players_repo import PlayerRepository
+from slay_db_update.models.app.player import Player as PlayerModel
 from slay_db_update.utils import get_nba_stats_result, timed
 
 p = Path()
@@ -25,38 +23,20 @@ def get_sleeper_players():
     sleeperbox = Box(**sleeperjson)
     return BoxList([player for player in sleeperbox.values()])
 
-def _get_db_session(config_path=None):
-    # read connection string from config.yaml in project root
-    cfg_path = config_path or Path(__file__).resolve().parents[2] / 'config.yaml'
-    if not cfg_path.exists():
-        raise RuntimeError(f"config.yaml not found at expected path: {cfg_path}")
-    cfg = yaml.safe_load(cfg_path.read_text())
-    conn = cfg.get('database') or cfg.get('connection_string') or cfg.get('connection')
-    if conn is None:
-        raise RuntimeError("database connection string not found in config.yaml")
-    engine = create_engine(conn)
-    Session = sessionmaker(bind=engine)
-    return Session()
-
 
 # python
-def update(db_conn=None, logger_factory=None):
+def update():
     # Initialize logger via factory if provided; be defensive so this function
     # can be called without a logger_factory in tests or ad-hoc runs.
-    logger = logger_factory(__name__) if logger_factory else None
-
+    logger = Config.get().get_logger(__name__)
 
     sleeper_players = timed("Sleeper API get-all-players request", logger)(get_sleeper_players)
-
     sleeper_count = sum(1 for _ in sleeper_players) if hasattr(sleeper_players, "__iter__") else 0
-    if logger:
-        logger.info("sleeper returned %d players", sleeper_count)
+    logger.info("sleeper returned %d players", sleeper_count)
 
     nbaorg_players = get_nbaorg_players()
-
     nbaorg_count = sum(1 for _ in nbaorg_players) if hasattr(nbaorg_players, "__iter__") else 0
-    if logger:
-        logger.info("nbaorg returned %d players", nbaorg_count)
+    logger.info("nbaorg returned %d players", nbaorg_count)
 
     double_count = 0
     not_in_sleeper = []
@@ -165,7 +145,7 @@ def update(db_conn=None, logger_factory=None):
             team_city=d.get("team_city") if d.get("team_city") is not None else d.get("TEAM_CITY"),
             team_name=d.get("team_name") if d.get("team_name") is not None else d.get("TEAM_NAME"),
             team_abbreviation=d.get("team_abbreviation") if d.get("team_abbreviation") is not None else d.get("TEAM_ABBREVIATION"),
-            jersey_number=d.get("jersey_numbe   r") if d.get("jersey_number") is not None else d.get("JERSEY_NUMBER"),
+            jersey_number=d.get("jersey_number") if d.get("jersey_number") is not None else d.get("JERSEY_NUMBER"),
             position=d.get("position") if d.get("position") is not None else d.get("POSITION"),
             height=d.get("height") if d.get("height") is not None else d.get("HEIGHT"),
             weight=(d.get("weight") if d.get("weight") is not None else d.get("WEIGHT")),
@@ -197,7 +177,7 @@ def update(db_conn=None, logger_factory=None):
             sleeper_mappings.append({'player_id': pid, 'sleeper_id': sid})
 
     # persist
-    session = _get_db_session()
+    session = Config.get().get_session()
     repo = PlayerRepository(session)
 
     inserted_players = 0
@@ -214,20 +194,11 @@ def update(db_conn=None, logger_factory=None):
         if sleeper_mappings:
             inserted_sleeper_mappings = repo.bulk_upsert('sleeper_player_ids', sleeper_mappings)
     except Exception as e:
-        if logger:
-            logger.error("error inserting players (bulk upsert): %s", str(e))
-        else:
-            print("error inserting players:", str(e))
+        logger.error("error inserting players (bulk upsert): %s", str(e))
     finally:
         session.close()
 
     # log only the numbers of newly-inserted players
-    if logger:
-        logger.info("inserted %d new players, %d unrecognized players, and %d sleeper mappings", inserted_players, inserted_unrecognized, inserted_sleeper_mappings)
-    else:
-        # fallback for environments without a logger
-        print(inserted_players)
-        print(inserted_unrecognized)
-        print(inserted_sleeper_mappings)
+    logger.info("inserted %d new players, %d unrecognized players, and %d sleeper mappings", inserted_players, inserted_unrecognized, inserted_sleeper_mappings)
 
     return inserted_players, inserted_unrecognized, inserted_sleeper_mappings

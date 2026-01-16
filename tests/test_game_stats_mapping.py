@@ -1,8 +1,5 @@
-import pytest
-from datetime import date
-
-from slay_db_update.NBAStatsModel import LeagueGameFinderResults, TeamAbbreviation, Outcome
-from slay_db_update.game_stats import GameStats
+from slay_db_update.models.nba import TeamAbbreviation, Outcome, LeagueGameFinderResults
+from slay_db_update.models.app.game_stats import GameStats
 from automapper import mapper
 
 

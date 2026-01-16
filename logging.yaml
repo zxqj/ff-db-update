@@ -1,14 +1,30 @@
 version: 1
-formatters:
-  simple:
-    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-handlers:
-  console:
-    class: logging.StreamHandler
-    level: DEBUG
-    formatter: simple
-    stream: ext://sys.stderr
-root:
-  level: DEBUG
-  handlers: [console]
+disable_existing_loggers: False
 
+formatters:
+  json_pretty:
+    # Use the class from the installed library
+    '()': pythonjsonlogger.jsonlogger.JsonFormatter
+    format: "%(asctime)s %(levelname)s %(name)s %(message)s"
+    rename_fields:
+      levelname: level
+      asctime: timestamp
+    static_fields:
+      service: my-app
+      env: dev
+
+handlers:
+  console_handler:
+    class: logging.StreamHandler
+    formatter: json_pretty
+    stream: ext://sys.stdout
+
+root:
+  level: INFO
+  handlers: [console_handler]
+
+loggers:
+  __main__:
+    level: DEBUG
+    handlers: [console_handler]
+    propagate: no

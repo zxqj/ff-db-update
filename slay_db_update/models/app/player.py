@@ -1,13 +1,4 @@
-from sqlalchemy import (
-    Column,
-    Integer,
-    Text,
-    Boolean,
-    DateTime,
-    Numeric,
-    func,
-    ForeignKey,
-)
+from sqlalchemy import Column, DateTime, func, Integer, Text, Numeric, Boolean, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 
 Base = declarative_base()
@@ -73,6 +64,7 @@ class Player(Base):
             'last_name': self.last_name,
             'id': self.id,
         }
+
 
 class SleeperPlayer(Base):
     __tablename__ = 'sleeper_player_ids'

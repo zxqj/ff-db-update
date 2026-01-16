@@ -8,13 +8,13 @@ from nba_api.stats.endpoints.leaguegamefinder import LeagueGameFinder
 from nba_api.stats.library.parameters import LeagueIDNullable, PlayerOrTeamAbbreviation
 from nba_api.stats.library.parameters import SeasonTypePlayoffs
 
-from . import NBAStatsAPI
-from .NBAStatsModel import LeagueGameFinderResults
-from .configuration import Config
-from .game_stats import GameStats
+import slay_db_update.api_cli
+from slay_db_update.models.nba.league_game_finder_results import LeagueGameFinderResults
+from slay_db_update.conf import Config
+from slay_db_update.models.app.game_stats import GameStats
 # new imports for repository access
-from .game_stats_repo import GameStatsRepository, GameStatsQuery
-from .nba_season import NBASeason
+from slay_db_update.repo.game_stats_repo import GameStatsRepository, GameStatsQuery
+from slay_db_update.api_cli.nba_season import NBASeason
 
 
 def json_dump(o):
@@ -44,13 +44,13 @@ def game_filter(result: LeagueGameFinderResults) -> bool:
 mapper.add(LeagueGameFinderResults, GameStats,
                    fields_mapping={"team_code": "LeagueGameFinderResults.team_abbreviation"})
 
-class GamesUpdater:
+class GameStatsUpdater:
     def __init__(self):
         self.game_repository: GameStatsRepository = GameStatsRepository()
         self.logger = Config.get().get_logger(__name__)
 
     def pull(self, args):
-        games: list[LeagueGameFinderResults] = [*NBAStatsAPI.invoke_endpoint(LeagueGameFinder, LeagueGameFinderResults, self.logger, **args)]
+        games: list[LeagueGameFinderResults] = [*slay_db_update.api_cli.invoke_endpoint(LeagueGameFinder, LeagueGameFinderResults, self.logger, **args)]
         self.logger.info(f"Found {len(games)} games")
         self.game_repository.insert([mapper.map(game) for game in games])
         Config.get().get_session().commit()

@@ -1,5 +1,4 @@
-import pytest
-from slay_db_update.nba_season import NBASeason
+from slay_db_update.api_cli.nba_season import NBASeason
 from datetime import datetime, date
 def test_nbaseason():
     assert NBASeason(datetime(2026, 1, 13, 3, 37, 22, 123509)) == 2025

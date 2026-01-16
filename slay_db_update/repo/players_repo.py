@@ -1,7 +1,7 @@
 from typing import List, Optional, Any
 from sqlalchemy.orm import Session
-from .configuration import Config
-from .models import Player
+from slay_db_update.conf import Config
+from slay_db_update.models.app.player import Player
 
 class PlayerRepository:
     def __init__(self, session: Session=Config.get().get_session()):

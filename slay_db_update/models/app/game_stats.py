@@ -9,8 +9,8 @@ from sqlalchemy import (
     func,
     PrimaryKeyConstraint,
 )
-
-from .models import Base
+from sqlalchemy.ext.declarative import declarative_base
+Base = declarative_base()
 
 class GameStats(Base):
     __tablename__ = "player_games"

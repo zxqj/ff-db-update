@@ -1,16 +1,16 @@
 from typing import Optional, List, Union, Tuple, Callable, Any
 from dataclasses import dataclass
 from datetime import date
-from sqlalchemy.orm import Session
 from sqlalchemy import select, func, insert, delete
 from sqlalchemy.sql.dml import DMLWhereBase
+from sqlalchemy.sql.functions import count
 
-from .configuration import Config
-from .game_stats import GameStats
-from .NBAStatsModel import LeagueGameFinderResults
+from slay_db_update.conf import Config
+from slay_db_update.models.app.game_stats import GameStats
+from slay_db_update.models.nba.league_game_finder_results import LeagueGameFinderResults
 from automapper import mapper
 
-from .utils import describe_exception
+from slay_db_update.utils import describe_exception
 
 _NUMERIC_COLS = [
     "fgm", "fga", "fg_pct", "fg3m", "fg3a", "fg3_pct", "ftm", "fta", "ft_pct",
@@ -48,8 +48,6 @@ class GameStatsQuery:
             dml = dml.where(GameStats.game_date <= self.date_to)
         return dml
 
-
-
 class GameStatsRepository:
     def __init__(self):
         self.session = Config.get().get_session()
@@ -78,6 +76,9 @@ class GameStatsRepository:
 
     def remove(self, gsq: GameStatsQuery):
         self.session.execute(gsq.to_dml(delete(GameStats)))
+
+    def duplicates(self):
+        select(GameStats.player_id, GameStats.player_id, count("*")).group_by(GameStats.player_id, GameStats.game_id).having(count("*") > 1)
 
     def search(self, gsq: GameStatsQuery) -> List[GameStats]:
         q = self.session.query(GameStats)
@@ -139,4 +140,3 @@ class GameStatsRepository:
 
     def map_from_league_result(self, league_obj: LeagueGameFinderResults) -> GameStats:
         return self._mapper.map(league_obj)
-
